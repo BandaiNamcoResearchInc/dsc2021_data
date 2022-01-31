@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<!--
+  three.js
+  Copyright © 2010-2022 three.js authors
+  Released under the MIT license
+  https://github.com/mrdoob/three.js/blob/dev/LICENSE
+-->
+<html lang="ja">
+
+<head>
+  <meta http-equiv="content-type" charset="UTF-8" />
+</head>
+
+<body>
+  <div id="app">
+    ＜このサイトの説明＞
+    <ul>
+      <li>
+        提出ファイルと同じ形式のファイル内のモーションを確認できます。（21関節・65列・30fps）
+      </li>
+      <li>
+        「ファイルを選択」ボタンで確認したいファイルを選択し、下のドロップダウンリストで確認したいモーションのIDを選択してください。
+      </li>
+      <li>
+        モーションが選択されると、下画面に表示されます。マウス左ドラッグで旋回、ホイールで拡大縮小、右ドラッグで平行移動が可能です。
+      </li>
+    </ul>
+    <label for="inputFile" class="filelabel">
+      <form action="#">
+        <p>
+          <input type="file" name="s_file" class="fileinput" id="inputFile" />
+        </p>
+      </form>
+    </label>
+    <select name="motion_list" , id="motionSelect">
+      <option id="empty" , disabled selected>----------</option>
+    </select>
+  </div>
+
+  <script type="module">
+    import * as THREE from "https://cdn.skypack.dev/three@0.136.0";
+
+    import { OrbitControls } from "https://cdn.skypack.dev/three@0.136.0/examples/jsm/controls/OrbitControls.js";
+    import { BVHLoader } from "https://cdn.skypack.dev/three@0.136.0/examples/jsm/loaders/BVHLoader.js";
+
+    const clock = new THREE.Clock();
+
+    let camera, controls, scene, renderer;
+    let mixer, skeletonHelper, mixer2, boneContainer2, skeletonHelper2;
+    let loaders = [];
+    let SkeletonHelpers = [];
+    let BoneContainers = [];
+    let clips = [];
+    let mixers = [];
+    let flags = [];
+    let clip, clip2;
+
+    const FrameRate = 30;
+    const PeriodNum = 30;
+    let FrameNum;
+    let duration;
+
+    init();
+    let sum_delta;
+    animate();
+    let inputFile = document.getElementById("inputFile").files[0];
+    let names = [
+      "Hips",
+      "Spine",
+      "Chest",
+      "Neck",
+      "Head",
+      "Shoulder_L",
+      "UpperArm_L",
+      "LowerArm_L",
+      "Hand_L",
+      "Shoulder_R",
+      "UpperArm_R",
+      "LowerArm_R",
+      "Hand_R",
+      "UpperLeg_L",
+      "LowerLeg_L",
+      "Foot_L",
+      "Toes_L",
+      "UpperLeg_R",
+      "LowerLeg_R",
+      "Foot_R",
+      "Toes_R",
+    ];
+    let structure = [
+      -1,
+      0,
+      1,
+      2,
+      3,
+      2,
+      5,
+      6,
+      7,
+      2,
+      9,
+      10,
+      11,
+      0,
+      13,
+      14,
+      15,
+      0,
+      17,
+      18,
+      19,
+    ];
+
+    let root = new THREE.Bone();
+    root.name = "Hips";
+    let bones = [root];
+
+    for (let index = 1; index < names.length; index++) {
+      let tmp = new THREE.Bone();
+      tmp.name = names[index];
+      bones.slice(structure[index])[0].add(tmp);
+      bones.push(tmp);
+    }
+    skeletonHelper = new THREE.SkeletonHelper(bones[0]);
+    let skeleton = new THREE.Skeleton(bones);
+    skeleton.bones = bones;
+    skeletonHelper.skeleton = skeleton;
+
+    const boneContainer = new THREE.Group();
+    boneContainer.add(bones[0]);
+    scene.add(skeletonHelper);
+    scene.add(boneContainer);
+
+    let file_data, motion_name;
+
+    let selectFile = document.getElementById("inputFile");
+    let selectMotion = document.getElementById("motionSelect");
+
+    selectFile.addEventListener("change", function (event) {
+      console.log("loading");
+      const file = event.target.files;
+
+      let reader = new FileReader();
+
+      reader.readAsText(file[0]);
+
+      file_data = [];
+      motion_name = [];
+      reader.onload = function () {
+        let txt_arr = reader.result.split("\n").slice(1);
+        txt_arr.forEach((element) => {
+          if (element.split(",")[0]) {
+            motion_name.push(element.split(",")[0]);
+          }
+          file_data.push(element.split(",").map(Number));
+        });
+
+        let motion_arr = Array.from(new Set(motion_name));
+        clip = null;
+        while (selectMotion.firstChild) {
+          selectMotion.removeChild(selectMotion.firstChild);
+        }
+        const disabled = document.createElement("option");
+        disabled.textContent = "----------";
+        disabled.disabled = true;
+        disabled.selected = true;
+        selectMotion.appendChild(disabled);
+
+        motion_arr.forEach((element) => {
+          const option = document.createElement("option");
+          option.value = element;
+          option.textContent = element;
+          selectMotion.appendChild(option);
+        });
+        console.log("Done: Load");
+      };
+    });
+
+    selectMotion.addEventListener("change", (e) => {
+      let tracks = [];
+      let motion_data = file_data.reduce(function (arr, val, index) {
+        if (Number(val[0]) == Number(e.target.value)) {
+          arr.push(val);
+        }
+        return arr;
+      }, []);
+
+      for (let i = 0; i < names.length; i++) {
+        let trackName = ".bones[" + names[i] + "].position";
+        let times = [];
+        let values = [];
+
+        for (let j = 0; j < motion_data.length; j++) {
+          times.push(j / FrameRate);
+          if (i == 0) {
+            values.push(motion_data[j][3 * i + 2]);
+            values.push(motion_data[j][3 * i + 3]);
+            values.push(motion_data[j][3 * i + 4]);
+          } else {
+            values.push(
+              motion_data[j][3 * i + 2] - motion_data[j][3 * structure[i] + 2]
+            );
+            values.push(
+              motion_data[j][3 * i + 3] - motion_data[j][3 * structure[i] + 3]
+            );
+            values.push(
+              motion_data[j][3 * i + 4] - motion_data[j][3 * structure[i] + 4]
+            );
+          }
+        }
+        tracks.push(new THREE.VectorKeyframeTrack(trackName, times, values));
+      }
+      duration = motion_data.length / FrameRate;
+      clip = new THREE.AnimationClip(null, duration, tracks);
+      FrameNum = Math.floor((duration * FrameRate) / PeriodNum);
+
+      //playng animations
+      mixer = new THREE.AnimationMixer(skeletonHelper);
+      mixer.clipAction(clip).setEffectiveWeight(1.0).play();
+      sum_delta = 0.0;
+    });
+
+    function init() {
+      camera = new THREE.PerspectiveCamera(
+        60,
+        window.innerWidth / window.innerHeight,
+        1,
+        10000
+      );
+      camera.position.set(-2000, 400, 0);
+
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xeeeeee);
+
+      scene.add(new THREE.GridHelper(2000, 20));
+
+      // renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      controls = new OrbitControls(camera, renderer.domElement);
+
+      window.addEventListener("resize", onWindowResize);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function animate() {
+      let id = window.requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+      if (mixer) {
+        mixer.update(delta);
+      }
+
+      sum_delta += delta;
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+
+</html>
